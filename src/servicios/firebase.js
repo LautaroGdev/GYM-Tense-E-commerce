@@ -10,12 +10,12 @@ const dynamicAppId = typeof __app_id !== 'undefined' ? __app_id : DEFAULT_PROJEC
 setLogLevel('Debug');
 
 const yourFirebaseConfig = {
-    apiKey: "AIzaSyB-QxUIunVr2mNbp92YbfzCOR2LiMola38",
-    authDomain: "gym-tense-e-commerce.firebaseapp.com",
-    projectId: "gym-tense-e-commerce",
-    storageBucket: "gym-tense-e-commerce.firebasestorage.app",
-    messagingSenderId: "926863960478",
-    appId: "1:926863960478:web:709905c7634e5e23ca4e8f"
+    apiKey: import.meta.env.VITE_FIREBASE_API_KEY,
+    authDomain: import.meta.env.VITE_FIREBASE_AUTH_DOMAIN,
+    projectId: import.meta.env.VITE_FIREBASE_PROJECT_ID,
+    storageBucket: import.meta.env.VITE_FIREBASE_STORAGE_BUCKET,
+    messagingSenderId: import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID,
+    appId: import.meta.env.VITE_FIREBASE_APP_ID
 };
 
 
