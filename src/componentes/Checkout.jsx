@@ -1,185 +1,215 @@
-import React from 'react';
+import React, { useState, useEffect } from 'react';
 import { Card, Typography, Button, Result, Spin, Divider, Form, Input, message } from 'antd';
-import { UserOutlined, MailOutlined, HomeOutlined, ShoppingCartOutlined, CheckCircleOutlined } from '@ant-design/icons';
+import { UserOutlined, MailOutlined, HomeOutlined, CheckCircleOutlined, PhoneOutlined, ArrowLeftOutlined } from '@ant-design/icons';
 import { useCart } from '../contexto/CartContext'; 
 import { useNavigate } from 'react-router-dom';
-import { addDoc, collection, Timestamp } from 'firebase/firestore'; 
-const db = window.db;
+import { 
+    collection, 
+    serverTimestamp, 
+    writeBatch, 
+    doc, 
+    getDocs, 
+    query, 
+    where,
+    documentId 
+} from 'firebase/firestore'; 
+
+//imports db
+import { db, PRODUCTS_COLLECTION, ORDERS_COLLECTION } from '../servicios/firebase.js'; 
+import { useUserAuth } from '../servicios/firebase.js';
 
 const { Title, Text } = Typography;
 
 const Checkout = () => {
     const { cart, totalPrice, clearCart } = useCart();
-    const [loading, setLoading] = React.useState(false);
-    const [orderId, setOrderId] = React.useState(null);
+    const [loading, setLoading] = useState(false);
+    const [orderId, setOrderId] = useState(null);
+    const [form] = Form.useForm();
     const navigate = useNavigate();
+    
+    // tomo el id
+    const { userId } = useUserAuth();
 
-    if (cart.length === 0 && !orderId) {
-        return (
-            <div style={{ padding: '50px', textAlign: 'center' }}>
-                <Result
-                    status="info"
-                    title="No hay productos en el carrito para finalizar la compra"
-                    subTitle="Vuelve al inicio para comenzar a comprar."
-                    extra={
-                        <Button 
-                            type="primary" 
-                            onClick={() => navigate('/')}
-                            style={{ backgroundColor: '#FF4500', borderColor: '#FF4500' }}
-                        >
-                            Ver Productos
-                        </Button>
-                    }
-                />
-            </div>
-        );
-    }
+    // redireccion
+    useEffect(() => {
+        if (cart.length === 0 && !orderId) {
+             const timeout = setTimeout(() => navigate('/'), 500);
+             return () => clearTimeout(timeout);
+        }
+    }, [cart, orderId, navigate]);
 
-    //crear la orden en Firestore
-    const createOrder = async (values) => {
+    // funcion principal para crear orden y actualizar stock
+    const handleSubmit = async (values) => {
+        if (cart.length === 0) return;
+        if (!db) { message.error('Error: Conexión a la base de datos no disponible.'); return; }
+
         setLoading(true);
+
         try {
-            
+            //datos de la orden
             const order = {
-                buyer: {
-                    name: values.name,
-                    phone: values.phone,
-                    email: values.email,
-                    address: values.address,
-                },
-                
+                buyer: values, // datos formulario 
                 items: cart.map(item => ({
                     id: item.id,
                     name: item.name,
                     price: item.price,
-                    quantity: item.quantity,
+                    quantity: item.quantity
                 })),
                 total: totalPrice,
-                date: Timestamp.fromDate(new Date()),
-                status: 'generated', 
+                date: serverTimestamp(), // fecha exacta del servidor de firestore
+                status: 'generada',
+                userId: userId, // id del usuario que compra
             };
 
+            // init batch y consultar s tock
+            const batch = writeBatch(db);
+            const productsRef = collection(db, PRODUCTS_COLLECTION);
+            const outOfStock = [];
+
+            const ids = cart.map(item => item.id);
             
-            const ordersCollection = collection(db, 'artifacts', window.__app_id, 'public', 'data', 'orders');
-            const docRef = await addDoc(ordersCollection, order);
+            // 
+            const productsQuery = query(productsRef, where(documentId(), 'in', ids));
+            const querySnapshot = await getDocs(productsQuery);
             
-            
-            clearCart();
-            setOrderId(docRef.id);
-            message.success(`Tu orden ${docRef.id} fue generada con éxito.`);
+            // check stock y preparar actualizaciones
+            querySnapshot.docs.forEach(docSnapshot => {
+                const productData = docSnapshot.data();
+                const stockDb = productData.stock;
+
+                const productInCart = cart.find(item => item.id === docSnapshot.id);
+                const prodQuantity = productInCart?.quantity;
+
+                if (stockDb >= prodQuantity) {
+                    batch.update(docSnapshot.ref, { stock: stockDb - prodQuantity });
+                } else {
+                    outOfStock.push({ id: docSnapshot.id, name: productData.name, available: stockDb });
+                }
+            })
+
+            if (outOfStock.length === 0) {
+                const ordersRef = collection(db, ORDERS_COLLECTION);
+                const newOrderRef = doc(ordersRef); 
+                
+                batch.set(newOrderRef, order); 
+
+                await batch.commit();
+
+                setOrderId(newOrderRef.id);
+                clearCart();
+                message.success("¡Orden generada con éxito!");
+            } else {
+                //error si falta stock
+                const outOfStockNames = outOfStock.map(i => `${i.name} (Disp: ${i.available})`).join(', ');
+                message.error(`Stock insuficiente: ${outOfStockNames}`);
+            }
 
         } catch (error) {
-            console.error("Error al crear la orden:", error);
-            message.error("Hubo un error al procesar tu compra. Inténtalo de nuevo. Revisa la consola para detalles.");
+            console.error("Error al procesar la orden o stock:", error);
+            message.error("Error en el servidor al procesar la compra.");
         } finally {
             setLoading(false);
         }
     };
 
-    
+    // vista de orden finalizada
     if (orderId) {
         return (
-            <div style={{ maxWidth: '800px', margin: '40px auto', padding: '0 20px' }}>
+            <div style={{ padding: '50px', textAlign: 'center', maxWidth: '600px', margin: '0 auto' }}>
                 <Result
                     status="success"
-                    title="¡Compra Finalizada con Éxito!"
-                    subTitle={`Tu número de orden es: ${orderId}. Recibirás un correo electrónico de confirmación en breve.`}
+                    title="¡Orden Generada!"
+                    subTitle={
+                        <span>
+                            Tu ID de compra es: <Text copyable strong>{orderId}</Text>
+                            <br />
+                            Guárdalo para el seguimiento. Gracias por tu compra.
+                        </span>
+                    }
                     extra={[
-                        <Button 
-                            type="primary" 
-                            key="home" 
-                            onClick={() => navigate('/')}
-                            style={{ backgroundColor: '#FF4500', borderColor: '#FF4500' }}
-                        >
-                            Volver al Inicio
-                        </Button>
+                        <Button type="primary" key="console" onClick={() => navigate('/')} icon={<ArrowLeftOutlined />} style={{ backgroundColor: '#FF4500', borderColor: '#FF4500' }}>
+                            Volver a la Tienda
+                        </Button>,
                     ]}
                 />
             </div>
         );
     }
+    
+    // vista de formulario
+    if (cart.length === 0) return <div style={{textAlign:'center', padding: 50}}><Spin tip="Redirigiendo..." /></div>;
 
-    // formulario de Checkout (si el carrito tiene items)
     return (
-        <div style={{ maxWidth: '700px', margin: '40px auto', padding: '0 20px' }}>
-            <Title level={2} style={{ color: '#1C1C1C', marginBottom: 30, textAlign: 'center' }}>
-                Finalizar Compra
-            </Title>
-            
+        <div style={{ maxWidth: 600, margin: '40px auto', padding: '0 20px' }}>
             <Card 
-                style={{ boxShadow: '0 4px 12px rgba(0,0,0,0.05)', borderRadius: '8px' }}
-                loading={loading}
-                title={
-                    <Title level={4} style={{ margin: 0 }}>
-                        Total a Pagar: <Text strong style={{ color: '#FF4500' }}>{totalPrice.toLocaleString('es-AR', { style: 'currency', currency: 'ARS' })}</Text>
-                    </Title>
-                }
+                title={<Title level={3} style={{ margin: 0, textAlign: 'center' }}>Finalizar Compra</Title>}
+                bordered={false} 
+                style={{ boxShadow: '0 4px 12px rgba(0,0,0,0.08)' }}
             >
-                <Spin spinning={loading} tip="Procesando tu orden...">
-                    <Title level={5} style={{ marginTop: 0 }}>Datos del Comprador</Title>
-                    <Form
-                        name="checkout_form"
-                        layout="vertical"
-                        onFinish={createOrder}
-                        autoComplete="off"
+                <Title level={5}>Resumen</Title>
+                <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 20 }}>
+                    <Text>Total a pagar:</Text>
+                    <Text strong style={{ fontSize: '1.2em', color: '#FF4500' }}>
+                        {totalPrice.toLocaleString('es-AR', { style: 'currency', currency: 'ARS' })}
+                    </Text>
+                </div>
+                <Divider />
+                
+                <Form form={form} layout="vertical" onFinish={handleSubmit}>
+                    <Form.Item name="name" label="Nombre Completo" rules={[{ required: true, message: 'Ingresa tu nombre' }]}>
+                        <Input prefix={<UserOutlined />} placeholder="Ej: Lautaro Gómez" />
+                    </Form.Item>
+                    
+                    <Form.Item name="phone" label="Teléfono" rules={[{ required: true, message: 'Ingresa tu teléfono' }]}>
+                        <Input prefix={<PhoneOutlined />} placeholder="Ej: 11 5555 5555" />
+                    </Form.Item>
+                    
+                    <Form.Item 
+                        name="email" 
+                        label="Email" 
+                        rules={[
+                            { required: true, message: 'Ingresa tu email' },
+                            { type: 'email', message: 'Email inválido' }
+                        ]}
                     >
-                        
-                        <Form.Item
-                            name="name"
-                            label="Nombre Completo"
-                            rules={[{ required: true, message: 'Por favor, ingresa tu nombre completo' }]}
-                        >
-                            <Input prefix={<UserOutlined />} placeholder="Ej: Lautaro Gómez" />
-                        </Form.Item>
-
-                        
-                        <Form.Item
-                            name="phone"
-                            label="Teléfono"
-                            rules={[{ required: true, message: 'Por favor, ingresa tu teléfono' }]}
-                        >
-                            <Input placeholder="Ej: +54 9 11 5555-5555" />
-                        </Form.Item>
-
-                        
-                        <Form.Item
-                            name="email"
-                            label="Correo Electrónico"
-                            rules={[
-                                { required: true, message: 'Por favor, ingresa tu email' },
-                                { type: 'email', message: 'El formato de email no es válido' }
-                            ]}
-                        >
-                            <Input prefix={<MailOutlined />} placeholder="ejemplo@correo.com" />
-                        </Form.Item>
-
-                        
-                        <Form.Item
-                            name="address"
-                            label="Dirección de Envío"
-                            rules={[{ required: true, message: 'Por favor, ingresa una dirección de envío' }]}
-                        >
-                            <Input prefix={<HomeOutlined />} placeholder="Calle, número, ciudad, código postal" />
-                        </Form.Item>
-
-                        <Divider />
-                        
-                        
-                        <Form.Item style={{ marginBottom: 0 }}>
-                            <Button 
-                                type="primary" 
-                                htmlType="submit" 
-                                size="large" 
-                                block 
-                                icon={<CheckCircleOutlined />}
-                                style={{ backgroundColor: '#FF4500', borderColor: '#FF4500' }}
-                                disabled={cart.length === 0 || loading}
-                            >
-                                Confirmar Compra
-                            </Button>
-                        </Form.Item>
-                    </Form>
-                </Spin>
+                        <Input prefix={<MailOutlined />} placeholder="juan@email.com" />
+                    </Form.Item>
+                    
+                    <Form.Item 
+                        name="emailConfirm" 
+                        label="Confirmar Email" 
+                        dependencies={['email']}
+                        rules={[
+                            { required: true, message: 'Confirma tu email' },
+                            ({ getFieldValue }) => ({
+                                validator(_, value) {
+                                    if (!value || getFieldValue('email') === value) {
+                                        return Promise.resolve();
+                                    }
+                                    return Promise.reject(new Error('Los emails no coinciden'));
+                                },
+                            }),
+                        ]}
+                    >
+                        <Input prefix={<MailOutlined />} placeholder="Repite tu email" />
+                    </Form.Item>
+                    
+                    <Form.Item name="address" label="Dirección de Envío" rules={[{ required: true, message: 'Ingresa tu dirección' }]}>
+                        <Input prefix={<HomeOutlined />} placeholder="Calle, Altura, Ciudad" />
+                    </Form.Item>
+                    
+                    <Button 
+                        type="primary" 
+                        htmlType="submit" 
+                        block 
+                        loading={loading} 
+                        icon={<CheckCircleOutlined />} 
+                        size="large" 
+                        style={{ backgroundColor: '#FF4500', borderColor: '#FF4500', marginTop: 10 }}
+                    >
+                        Generar Orden
+                    </Button>
+                </Form>
             </Card>
         </div>
     );

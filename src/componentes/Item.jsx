@@ -1,6 +1,6 @@
 import React from 'react';
 import { Card, Button, Typography, Tag } from 'antd';
-import { DollarOutlined, EyeOutlined } from '@ant-design/icons';
+import { EyeOutlined } from '@ant-design/icons';
 import { Link } from 'react-router-dom';
 
 const { Meta } = Card;
@@ -30,9 +30,7 @@ const styles = {
 
 const Item = ({ product }) => {
     
-    const handleButtonClick = (e) => {
-        e.stopPropagation(); 
-    };
+    
 
     return (
         <Link to={`/item/${product.id}`} style={{ textDecoration: 'none' }}>
@@ -62,10 +60,10 @@ const Item = ({ product }) => {
                             <Text type="secondary" ellipsis>{product.description}</Text>
                             <div style={{ marginTop: 10 }}>
                                 <Text style={styles.price}>
-                                    <DollarOutlined /> ${product.price}
+                                    ${product.price}
                                 </Text>
                             </div>
-                            <Text type="secondary" style={{ display: 'block' }}>Stock: {product.stock}</Text>
+                            
                         </>
                     }
                 />

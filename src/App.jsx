@@ -51,7 +51,7 @@ function App() {
 
             {/* Footer */}
             <Footer style={{ textAlign: 'center', backgroundColor: '#1C1C1C', color: '#FFF' }}>
-                GYM TENSE E-commerce ©{new Date().getFullYear()} Creado para Proyecto React
+                GYM TENSE E-commerce ©{new Date().getFullYear()}
             </Footer>
         </CartProvider>
         </Layout>
